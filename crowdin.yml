@@ -1,0 +1,11 @@
+files:
+  - source: /i18n/en.json
+    translation: /i18n/%two_letters_code%.%file_extension%
+    languages_mapping:
+      two_letters_code:
+        zh-HK: zh_HK
+        en-US: en_US
+    update_option: update_as_unapproved
+
+pull_request_title: "NO-JIRA: New translations from Crowdin"
+pull_request_labels: ["change:standard"]

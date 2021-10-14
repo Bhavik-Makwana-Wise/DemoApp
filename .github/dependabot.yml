@@ -1,0 +1,29 @@
+version: 2
+
+registries:
+  npm-npmjs:
+    type: npm-registry
+    url: https://registry.npmjs.org
+    token: ${{ secrets.NPM_TOKEN_READONLY }}
+
+updates:
+  - package-ecosystem: 'npm'
+    directory: '/'
+    registries:
+      - 'npm-npmjs'
+    schedule:
+      interval: 'weekly'
+    allow:
+      - dependency-name: 'currency-flags'
+      - dependency-name: 'react'
+      - dependency-name: 'react-dom'
+      - dependency-name: 'typescript'
+      - dependency-name: '@transferwise/*'
+      - dependency-name: 'axios'
+      - dependency-name: 'jest'
+      - dependency-name: '@testing-library/*'
+    pull-request-branch-name:
+      separator: '-'
+    labels:
+      - 'dependencies'
+      - 'change:standard'

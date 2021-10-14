@@ -1,0 +1,4 @@
+{
+  "crab-template.example-alert.action": "Aflați mai multe",
+  "crab-template.example-alert.message": "Bine ați venit la Crab! Profil 🦀 selectat: {selectedProfileId}"
+}

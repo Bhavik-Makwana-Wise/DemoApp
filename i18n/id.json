@@ -1,0 +1,4 @@
+{
+  "crab-template.example-alert.action": "Pelajari lebih lanjut",
+  "crab-template.example-alert.message": "Selamat datang di Crab! Profil 🦀 yang dipilih: {selectedProfileId}"
+}

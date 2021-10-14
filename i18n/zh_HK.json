@@ -1,0 +1,4 @@
+{
+  "crab-template.example-alert.action": "學到更多",
+  "crab-template.example-alert.message": "歡迎來到 Crab! 🦀 選定的個人資料: {selectedProfileId}"
+}

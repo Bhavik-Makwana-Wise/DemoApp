@@ -1,0 +1,11 @@
+.env.local
+.idea
+.next
+.vscode
+.yalc
+node_modules
+reports
+yalc.lock
+sonar-project.properties
+coverage
+test-report.xml

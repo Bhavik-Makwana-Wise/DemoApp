@@ -1,0 +1,4 @@
+{
+  "crab-template.example-alert.action": "En savoir plus",
+  "crab-template.example-alert.message": "Bienvenue sur Crab! Profil 🦀 sélectionné: {selectedProfileId}"
+}

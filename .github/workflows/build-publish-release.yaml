@@ -1,0 +1,223 @@
+name: Test Build Release
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - '**-ce'
+
+env:
+  DEPLOY_SLACK_CHANNEL: '#crab'
+  DEPLOY_IMAGE_NAME: crab-frontend
+  DEPLOY_REGISTRY_URL: ${{ secrets.DEPLOY_REGISTRY_URL }}
+  ARTIFACTORY_USER: ${{ secrets.ARTIFACTORY_USER }}
+  ARTIFACTORY_PASSWORD: ${{ secrets.ARTIFACTORY_PASSWORD }}
+  NPM_TOKEN_READONLY: ${{ secrets.NPM_TOKEN_READONLY }}
+  CYPRESS_RECORD_KEY: ${{ secrets.CYPRESS_KEY }}
+
+jobs:
+  install-build:
+    name: Install and cache dependencies, build app
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/actions_node14
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Get yarn cache directory path
+        id: yarn-cache-dir-path
+        run: echo "::set-output name=dir::$(yarn cache dir)"
+
+      - name: Use cache for yarn
+        id: yarn-cache
+        uses: actions/cache@v2
+        with:
+          path: ${{ steps.yarn-cache-dir-path.outputs.dir }}
+          key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
+
+      - name: Use cache for modules and built files
+        id: build-cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ./node_modules
+            ./.next
+          key: build-cache-${{ github.sha }}
+
+      - name: Set npm token
+        run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN_READONLY" >> ~/.npmrc
+
+      - name: Install dependencies
+        run: yarn --frozen-lockfile
+
+      - name: Build
+        run: yarn build
+
+      - name: Analyze bundle sizes
+        uses: transferwise/actions-next-bundle-analyzer@master
+        with:
+          workflow-id: build-publish-release.yaml
+          base-branch: main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  static-analysis:
+    name: Run Sonarqube static analysis
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/actions_sonar4
+    if: github.ref == 'refs/heads/main'
+    needs: install-build
+    env:
+      SONARQUBE_HOST: ${{ secrets.SONARQUBE_HOST }}
+      SONARQUBE_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Use cache for modules and built files
+        id: build-cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ./node_modules
+            ./.next
+          key: build-cache-${{ github.sha }}
+
+      - name: Generate sonarqube properties
+        run: .github/generate-sonar-properties.sh
+
+      - name: Run SonarQube analysis
+        run: SONAR_HOST_URL="$SONARQUBE_HOST" sonar-scanner -Dsonar.login=$SONARQUBE_TOKEN
+
+  unit-and-integration-test:
+    name: Run tests, check types, lint
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/actions_node14
+    needs: install-build
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Use cache for modules and built files
+        id: build-cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ./node_modules
+            ./.next
+          key: build-cache-${{ github.sha }}
+
+      - name: Check types
+        run: yarn tsc
+
+      - name: Lint package
+        run: yarn lint
+
+      - name: Run unit & integration tests
+        run: yarn test:ci
+
+  upload-sourcemaps:
+    name: Upload source maps
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/actions_node14
+    if: github.ref == 'refs/heads/main' || endsWith(github.ref, '-ce')
+    needs: install-build
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v2
+
+      - name: Use cache for modules and built files
+        id: build-cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ./node_modules
+            ./.next
+          key: build-cache-${{ github.sha }}
+
+      - name: Upload sourcemaps
+        run: yarn upload-source-maps
+
+  deploy:
+    name: Build docker image and push to Artifactory
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/k8s-deployer:3
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      tag: ${{ steps.docker.outputs.tag }}
+    if: github.ref == 'refs/heads/main' || endsWith(github.ref, '-ce')
+    needs:
+      - unit-and-integration-test
+      - upload-sourcemaps
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Use cache for modules and built files
+        id: build-cache
+        uses: actions/cache@v2
+        with:
+          path: |
+            ./node_modules
+            ./.next
+          key: build-cache-${{ github.sha }}
+
+      - name: Build image and push
+        id: docker
+        run: k8s-deployment docker-build jfrog-cli-docker-push
+
+      - name: Upload .next/static to Artifactory
+        id: vars
+        run: k8s-deployment upload-frontend-assets
+
+  promote-docker-image:
+    name: Promote docker image for production
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/k8s-deployer:3
+    if: github.ref == 'refs/heads/main' && needs.deploy.outputs.tag != null
+    needs: deploy
+
+    steps:
+      - name: Promote image for use in production
+        run: k8s-deployment trigger-image-promotion
+        env:
+          GH_ACCESS_TOKEN: ${{ secrets.K8S_PROMOTION_TOKEN }}
+          DEPLOY_OCTOPUS_URL: ${{ secrets.DEPLOY_OCTOPUS_URL }}
+          DEPLOY_OCTOPUS_TOKEN: ${{ secrets.DEPLOY_OCTOPUS_TOKEN }}
+          DEPLOY_IMAGE_TAG: ${{ needs.deploy.outputs.tag }}
+
+  deploy-to-staging:
+    name: Deploy docker image to staging
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/k8s-deployer:3
+    if: github.ref == 'refs/heads/main' && needs.deploy.outputs.tag != null
+    needs: deploy
+
+    steps:
+      - name: Release image to staging
+        run: k8s-deployment octopus-deploy
+        env:
+          DEPLOY_OCTOPUS_URL: ${{ secrets.DEPLOY_OCTOPUS_URL }}
+          DEPLOY_OCTOPUS_TOKEN: ${{ secrets.DEPLOY_OCTOPUS_TOKEN }}
+          DEPLOY_IMAGE_TAG: ${{ needs.deploy.outputs.tag }}
+        continue-on-error: true
+
+  request-frontend-asset-promotion:
+    name: Request assets to be deployed to S3
+    runs-on: [self-hosted, production]
+    container: docker.tw.ee/k8s-deployer:3
+    if: github.ref == 'refs/heads/main' || endsWith(github.ref, '-ce')
+    needs: deploy
+
+    steps:
+      - name: Request promotion of assets
+        run: k8s-deployment request-frontend-promotion
+        env:
+          GH_ACCESS_TOKEN: ${{ secrets.K8S_PROMOTION_TOKEN }}
+          VERSION_NUMBER: ${{ needs.deploy.outputs.version }}
